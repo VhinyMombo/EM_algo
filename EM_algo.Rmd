@@ -1,0 +1,258 @@
+---
+title: "projet_mad"
+author: "Vhiny-Guilley"
+date: "21/11/2020"
+output: html_document
+---
+```{r}
+library(mclust)
+library(MASS)
+library(mvtnorm)
+Q<-qchisq(p=seq(0.05,0.95,by=0.1),df=2)
+
+p = 1/2
+N = 1000
+ 
+Z = sample(2, size = N, replace = T, prob = c(p,1-p))
+X = matrix(rnorm(2*N,),N,2)
+sigma1<-diag(x=1,2)
+sigma2<-diag(x=4,2)
+mu1 = c(1,2)
+mu2 = mu1
+
+Y = matrix(rep(0,2*N),N,2)
+Y[Z==1,]<-X[Z==1,]%*%chol(sigma1)+mu1
+Y[Z==2,]<-X[Z==2,]%*%chol(sigma2)+mu2
+
+
+
+plot(Y,xlab="x",ylab="y",pch="*")
+hist(Y,breaks = 100)
+```
+
+
+```{r}
+sigmainv1<-solve(sigma1)
+sigmainv2<-solve(sigma2)
+
+a1<-sigmainv1[1,1]
+b1<-sigmainv1[2,2]
+c1<-sigmainv1[1,2]
+
+a2<-sigmainv2[1,1]
+b2<-sigmainv2[2,2]
+c2<-sigmainv2[1,2]
+
+x<-seq(-6+mu1[1],6+mu1[2],length=100)
+y<-seq(-6+mu1[1],6+mu1[2],length=100)
+z1<-outer(x,y,function(x,y) (a1*(x-mu1[1])^2+b1*(y-mu1[2])^2+2*c1*(x-mu1[1])*(x-mu1[2])))
+z2<-outer(x,y,function(x,y) (a2*(x-mu2[1])^2+b2*(y-mu2[2])^2+2*c2*(x-mu2[1])*(x-mu2[2])))
+
+f1 = 1/(2*pi)*det(sigmainv1)^(-1/2)*exp(-0.5*z1)
+f2 = 1/(2*pi)*det(sigmainv2)^(-1/2)*exp(-0.5*z2)
+f=p*f1+(1-p)*f2
+
+{
+image(x,y,p*z1+(1-p)*z2)
+contour(x,y,p*z1+(1-p)*z2,col="green4",levels=Q,labels=seq(from=0.05,to=0.95,by=0.1),add=T)
+
+}
+
+persp(x,y,f,col="cornflowerblue")
+
+```
+
+# Exercice 2
+## 1 .
+
+```{r}
+library(mclust)
+```
+
+```{r}
+mod5 <- Mclust(Y)
+summary(mod5)
+plot(mod5, what = "BIC")
+plot(mod5, what = "density")
+```
+D'après Mclust, le nombre de cluster qui maximise le BIC est, 2. Ce qui correspond bien à notre simulation
+```{r}
+mod5$parameters$pro
+mod5$parameters$variance$sigma
+mod5$parameters$mean
+mod5$classification
+```
+L'estimation de $\hat{\pi}_k$ pour $k = {1,2}$ nous donne des valeurs autour de $\pi_k$ proche de $1/2$.
+on a $\hat{\Sigma}_1$,  $\hat{\Sigma}_2$ assez proche de  ${\Sigma}_1$ et de  ${\Sigma}_2$ par contre on a bien $\hat{\mu}_1 \approx \hat{\mu}_2$ mais $\hat{\mu} \neq \mu$ 
+
+Donc Mclust estime mal la moyenne de notre distribution.
+
+```{r}
+res.kmeans = kmeans(Y, centers = 2, nstart = 50)
+res.kmeans
+par(mfrow = c(1,3))
+plot(Y, col = rainbow(2)[res.kmeans$cluster],main = "k-means",pch = c("*","*"),cex = 1.5,xlab = "x",ylab = "y")
+mclust2Dplot(Y,parameters = mod5$parameters,classification = mod5$classification,z = mod5$z,uncertainty = mod5$uncertainty,colors = rainbow(2)[mod5$classification],cex = 1.5,PCH = c(".","."),symbols = c("*","*"),fillEllipses = F,addEllipses = T,xlab = "x",ylab = "y",main = T)
+plot(Y, col = rainbow(2)[-Z+3],main = "True",pch = c("*","*"),cex = 1.5,xlab = "x",ylab = "y")
+
+```
+Le model obtenu par les k-means n'arrive pas à classer correctement nos données. Tandis que les Mclust un modèle assez probable.
+
+```{r}
+
+```
+
+
+```{r}
+plot(mod5, what = "density", type = "persp")
+```
+
+
+
+
+```{r}
+ncluster = 2 #nombre de cluster
+p = 2 # dimension des vecteurs x
+x = runif(n = ncluster,min = 0,max = 1)
+#####################
+pi_k = x/sum(x) # initialisation de p(Z_k) = pi_k de maniere aleatoires.
+#####################
+mu_k = matrix(runif(ncluster*p,min = min(Y[,1:p]),max = max(Y[,1:p])),p, ncluster) # matrice (p,ncluster) dont la colonne k represente la moyenne de classe k
+#####################
+Sigma_k = list()
+mat = diag(runif(n=p))
+for (k in 1:ncluster) { 
+  Sigma_k[[paste("sigma",k,sep= "")]] = mat
+}
+```
+
+
+```{r}
+########################################## initialisation des Tik E-step
+E_step = function(Y,mu_k,pi_k,Sigma_k){
+  T_ik = matrix(rep(0,nrow(Y)*ncluster),nrow = nrow(Y),ncol = ncluster)
+  require(mvtnorm)
+  Q_theta = 0
+  for (i in 1:nrow(Y)) {
+    num = c()
+    for (k in 1:ncluster) {
+      num[k] = pi_k[k]*dmvnorm(Y[i,],mean = mu_k[,k],sigma = Sigma_k[[k]])
+    }
+    for (k in 1:ncluster) {
+      T_ik[i,k] = num[k]/sum(num)
+      Q_theta = Q_theta+T_ik[i,k]*log(num[k])
+    }
+  }
+  return(list(Tik = T_ik,Q_theta = Q_theta))
+}
+E_res = E_step(Y,mu_k = mu_k,pi_k = pi_k,Sigma_k = Sigma_k)
+```
+
+
+```{r}
+################################################################E-M step
+
+EM_step = function(Y,mu_k,pi_k,Sigma_k){
+  E_res = E_step(Y,mu_k = mu_k,pi_k = pi_k,Sigma_k = Sigma_k)
+  Tik = E_res$Tik
+  Sigma_k1 = Sigma_k
+  pi_k1=pi_k
+  mu_k1=mu_k
+  Sigma_k1 = Sigma_k 
+  for (k in 1:ncluster){
+    pi_k1[k] = 1/nrow(Tik) * sum(Tik[,k])
+    mu_k1[,k] = colSums(Y*as.vector(Tik[,k]))/sum(Tik[,k])
+    s =c()
+    for (i in 1:nrow(Y)) {
+      s = s+Tik[i,k]*(Y[i,]-mu_k[,k])%*%t(Y[i,]-mu_k[,k])
+    }
+      Sigma_k[[paste("sigma",k,sep= "")]] = s/sum(Tik[,k])
+  }
+  return(list(pi_k = pi_k1, mu_k = mu_k1,Sigma_k = Sigma_k1,Qth = E_res$Q_theta))
+}
+EM_res = EM_step(Y,mu_k = mu_k,pi_k = pi_k,Sigma_k = Sigma_k)
+```
+
+
+```{r}
+EM_algo = function(Y,ncluster,iter = 10,eps = 10^-2){
+  
+    p = ncol(Y) # dimension des vecteurs x
+    x = runif(n = ncluster,min = 0,max = 1)
+    #####################
+    pi_O = x/sum(x) # initialisation de p(Z_k) = pi_k de maniere aleatoires.
+    #####################
+    mu_O = matrix(runif(ncluster*p,min = min(Y[,1:p]),max = max(Y[,1:p])),p, ncluster) # matrice (p,ncluster) dont la colonne k represente la moyenne de classe k
+    ##################### cobariances matrices
+    Sigma_O = list()
+    mat = diag(runif(n=p))
+    for (k in 1:ncluster) { 
+        Sigma_O[[paste("sigma",k,sep= "")]] = mat
+    }
+    QQ = c()
+    for (l in 1:iter) {
+      print(l)
+      EM_res = EM_step(Y,mu_k = mu_O,pi_k = pi_O,Sigma_k = Sigma_O)
+      mu_O=EM_res$mu_k
+      pi_O=EM_res$pi_k
+      Sigma_O=EM_res$Sigma_k
+      QQ[l] = EM_res$Qth
+    }
+    return(list(pi_k = pi_O, mu_k=mu_O,Sigma_k=Sigma_O,Qth = QQ))
+}
+```
+
+
+```{r}
+A = EM_algo(Y,ncluster = 2,iter = 10)
+
+```
+
+```{r}
+#X1 = rmvnorm(n = 1000,mu1, sigma1)
+#X2 = rmvnorm(n = 1000, mu2, sigma2)
+
+
+#sigma1
+
+
+X = matrix(rnorm(2*N),N,2) # generate a 1000*2 matrix of random variable iid.
+ind = sample(2,nrow(X), replace = T,prob = c(p,1-p))
+X1 = X[ind==1,]
+X2 = X[ind==2,]
+
+Y1<-X1%*%chol(sigma1)+mu1
+Y2<-X2%*%chol(sigma2)+mu2
+
+
+
+#plot(Y1,xlab="x",ylab="y",pch="*")
+#x<-seq(-4,4,length=100)
+#y<-seq(-4,4,length=100)
+
+library(ggplot2)
+sigmainv<-solve(sigma1)
+a<-sigmainv[1,1]
+b<-sigmainv[2,2]
+c<-sigmainv[1,2]
+z<-outer(x,y,function(x,y) (a*(x-1)^2+b*y^2+2*c*x*y))
+image(x,y,z)
+contour(x,y,z,col="blue4",levels=Q,labels=seq(from=0.05,to=0.95,by=0.1),add=T)
+persp(x,y,1/(2*pi)*det(sigmainv)^(-1/2)*exp(-0.5*z),col="cornflowerblue")
+
+```
+
+
+```{r}
+set.seed(1)
+nks = rmultinom(n = 1000,c(1,2),c(1,1), prob = c(1/2, 1/2))
+means = c(1,2)
+sds = c(1,1/2)
+samples = mapply(function(nk, mean, sd){rnorm(nk, mean, sd)}, nks, means, sds)
+x = unlist(samples)
+hist(x)
+```
+```{r}
+
+```
+
