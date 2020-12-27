@@ -1,0 +1,371 @@
+---
+title: "projet_mad"
+author: "Vhiny-Guilley"
+date: "21/11/2020"
+output:
+  word_document: default
+  html_document: default
+---
+
+##Exercice 1
+
+### Question 1
+
+```{r}
+library(mclust)
+library(MASS)
+library(mvtnorm)
+library(ggplot2)
+
+```
+
+
+```{r}
+
+### distribution 2D à 2 clusters
+#### nombre de points
+N = 1000
+X = matrix(rnorm(2*N,),N,2)
+ncluster = 2
+### Valeurs
+p = 0.5
+pi_k = c(p,1-p) 
+
+### Attrivution de classe de maniere aleatoire
+Z = sample(2, size = N, replace = T, prob = c(p,1-p))
+
+### Matrice de Covariance
+sigma1<-matrix(c(1,0,0,1), ncol=2, byrow=T)
+sigma2<-matrix(c(4,0,0,4), ncol=2, byrow=T)
+Sigma_k = list(sigma1,sigma2)
+### MOyenne de Chaque cluster
+mu1 = c(1,2)
+mu2 = c(1,2)
+mu_k = list(mu1,mu2)
+
+### Calcule des distribution
+Y = matrix(rep(0,2*N),N,2)
+Y[Z==1,]<-X[Z==1,]%*%chol(sigma1)+mu1
+Y[Z==2,]<-X[Z==2,]%*%chol(sigma2)+mu2
+Y = cbind(x1=Y[,1],
+          x2=Y[,2],
+          cluster=Z)
+#### Construction du theta = (pi_k, mu_k, sigma_k )
+theta0 = list()
+   for (k in 1:ncluster) {
+    theta0[[k]] <- list(pi_k=pi_k[k],
+                 means=mu_k[[k]],
+                 cov=Sigma_k[[k]])}
+```
+
+
+
+### Question2
+```{r}
+plotClasses <- function(Y, Zik,truth = " True")
+{
+  ncluster = length(unique(Zik))
+  plot(Y[,1], Y[,2],
+       xlab="x1", ylab="x2", main=c("Gaussian mixture model",truth),
+       col=c("red","cyan","blue", "green","purple")[Zik],
+       pch=(1:ncluster)[Zik])
+  col=c("red","cyan","blue", "green","purple")[1:ncluster]
+  pch    <- 1:ncluster
+  legend <- paste("Cluster", 1:ncluster)
+  legend("topleft", col=col, pch=pch, legend=legend)
+}
+
+plotkmeans <- function(Y, Zik)
+{
+  ncluster = length(unique(Zik))
+  plot(Y[,1], Y[,2],
+       xlab="x1", ylab="x2", main=paste(ncluster,sep = " ","Kmeans result"),
+      col=c("red","cyan","blue", "green","purple")[Zik],
+       pch=(1:ncluster)[Zik])
+  col=col=c("red","cyan","blue", "green","purple")[1:ncluster]
+  pch    <- 1:ncluster
+  legend <- paste("Cluster", 1:ncluster)
+  legend("topleft", col=col, pch=pch, legend=legend)
+}
+
+# Plot the 2D contours of the estimated Gaussian components
+contourClasses <- function(means, cov, l)
+{
+  X <- mvtnorm::rmvnorm(1000, means, cov)
+  z <- MASS::kde2d(X[,1], X[,2], n=50)
+  contour(z, drawlabels=FALSE, add=TRUE, lty=l, lwd=1.5)
+}
+```
+
+
+
+
+```{r}
+plotClasses(Y[,1:2],Zik = Y[,ncol(Y)])
+
+### Q3 ajout des Contours
+invisible(lapply(1:length(unique(Z)), function(k) contourClasses(theta0[[k]]$means, theta0[[k]]$cov, k + 1)))
+
+### histogramme
+hist(Y[,1:2],breaks = 100)
+```
+## Exercice 2
+### Question 1 
+
+```{r}
+mod5 <- Mclust(Y[,1:2])
+summary(mod5)
+plot(mod5, what = "BIC")
+```
+D'après Mclust, le nombre de cluster qui maximise le BIC est, 2. Ce qui correspond bien à notre simulation.
+
+### Question 2
+```{r}
+mod5$parameters$pro
+```
+On est proche de 0.5 qui est la probabilité de départ.
+```{r}
+mod5$parameters$variance$sigma
+```
+
+
+```{r}
+mod5$parameters$mean
+```
+### Question 3
+
+```{r}
+mod5$classification
+table(Y[,3],mod5$classification)
+
+```
+L'estimation de $\hat{\pi}_k$ pour $k = {1,2}$ nous donne des valeurs autour de $\pi_k$ proche de $1/2$.
+on a $\hat{\Sigma}_1$,  $\hat{\Sigma}_2$ assez proche de  ${\Sigma}_1$ et de  ${\Sigma}_2$ par contre on a bien $\hat{\mu}_1 \approx \hat{\mu}_2$ mais $\hat{\mu} \neq \mu$ 
+
+Donc Mclust estime mal la moyenne de notre distribution.
+
+### Question 4 
+```{r}
+res.kmeans = kmeans(Y[,1:2], centers = 2, nstart = 50)
+table(res.kmeans$cluster,mod5$classification)
+```
+Les k-means séparent la distribution avec une droite
+
+### Question 5
+```{r}
+par(mfrow = c(1,3))
+plotkmeans(Y = Y[,1:2],Zik = res.kmeans$cluster)
+plotClasses(Y = Y[,1:2],Zik = mod5$classification,truth = "Mclust")
+invisible(lapply(1:length(unique(res.kmeans$cluster)), function(k) contourClasses(mod5$parameters$mean[,k], mod5$parameters$variance$sigma[,,k], k + 1)))
+plotClasses(Y = Y[,1:2],Zik = Y[,3])
+invisible(lapply(1:length(unique(Y[,3])), function(k) contourClasses(theta0[[k]]$means, theta0[[k]]$cov, k + 1)))
+```
+
+##  Exercice 3 Alorithm EM
+
+### Question 5
+
+E-step code
+
+```{r}
+########################################## initialisation des Tik E-step
+E_step = function(Y,theta,ncluster = 2){
+  
+   # Compute the sum of all responsibilities (for normalization)
+    fxi <- sapply(theta, function(r)
+    {
+      r$pi_k *  mvtnorm::dmvnorm(Y, r$means, r$cov)
+    })
+    sum_fxi <- apply(fxi, 1, sum)
+    # Compute the responsibilities for each sample
+    T_ik <- sapply(theta, function(e)
+    {
+      e$pi_k * mvtnorm::dmvnorm(Y, e$means, e$cov) / sum_fxi
+    })
+    return(list(T_ik = T_ik))
+}
+```
+
+Application du E_step sur le jeu depart
+```{r}
+T_ik = E_step(Y[,1:2], theta0, ncluster = 2)
+
+zik <- apply(T_ik$T_ik,1,which.max)
+table(zik,Y[,3])
+```
+On a quelque faut positive à cause du caractre proabiliste.
+
+### Question 6
+
+```{r}
+################################################################E-M step
+
+M_step = function(Tik,Y, ncluster = 2){
+  
+  ### M step
+    # nombre d'element par classe
+    N.k <- apply(Tik, 2, sum)
+    # Compute the new means
+    #mu_k <- lapply(1:ncluster, function(k)
+    #{
+     # apply(Tik[,k] * Y, 2, sum) / N.k[k]
+    #})
+    
+     mu_k <- lapply(1:ncluster, function(j) sapply(1:ncol(Y), 
+                  function(i) apply(Tik * Y[, i], 2, sum))[j, ]/sum(Tik[, 
+                  j]))
+    # Compute the new covariances
+    #sigmak <- lapply(1:ncluster, function(k)
+    #{
+     # covmat(Tik[,k], Y, mu_k[[k]], N.k[k])
+    #})
+    sigmak <- lapply(1:ncluster, function(k) matrix(apply(sapply(1:nrow(Tik), 
+                  function(i) Tik[i, k] * (Y[i, ] - mu_k[[k]]) %*% 
+                    t(Y[i, ] - mu_k[[k]])), 1, sum), ncol(Y), ncol(Y))/sum(Tik[, 
+                  k]))
+    
+    # Compute the new mixing weights
+    pi_k <- apply(Tik, 2, mean)
+    # Update the old parameters
+    theta <- lapply(1:ncluster,function(k)
+    {
+      list(pi_k = pi_k[k], means=mu_k[[k]], cov=sigmak[[k]])
+    })
+    return(theta)
+}
+```
+
+### Question 6
+
+```{r}
+EM_algo = function(Y,ncluster,iter = 10,eps = 10^-6){
+###############################################################################################################"  
+  #res.kmeans = kmeans(Y, centers = ncluster, nstart = 50)
+  #####################
+  #pi_k = x/sum(x) # initialisation de p(Z_k) = pi_k de maniere aleatoires.
+  #pi_k = c(sum(res.kmeans$cluster==1)/dim(Y)[1],sum(res.kmeans$cluster==2)/dim(Y)[1])
+  x = runif(n = ncluster,min = 0,max = 1)
+  pi_k = x/sum(x)
+  #####################
+  #mu_k = res.kmeans$centers# matrice (p,ncluster) dont la colonne k represente la moyenne de classe k
+  mu_k = matrix(runif(n = ncol(Y)*ncluster,min = 0,max = 1),nrow = ncol(Y) ,ncol = ncluster)
+  
+  #####################
+  Sigma_k = list()
+  for (k in 1:ncluster) { 
+    #Sigma_k[[paste("sigma",k,sep= "")]] = cov(Y[res.kmeans$cluster==k,],Y[res.kmeans$cluster==k,])}
+    Sigma_k[[paste("sigma",k,sep= "")]] = diag(x = c(runif(ncol(Y),min = 0,max = 1)),nrow = ncol(Y))}
+  ########################################################
+  theta = list()
+   for (k in 1:ncluster) {
+    theta[[k]] <- list(pi_k=pi_k[k],
+                 means=mu_k[,k],
+                 cov=Sigma_k[[k]])}
+  
+########################################################################################################""
+      QQ = c(0)
+      c=1
+      repeat {
+      l = c
+      print(l)
+      print("E-step")
+      
+      E_res = E_step(Y = Y,theta = theta,ncluster)
+      print("M-step")
+      Tik = E_res$T_ik
+      print(dim(Tik))
+      theta = M_step(Tik = Tik,Y = Y,ncluster)
+      #################################################
+      
+      ####################### Computation  of the lolikelihood
+      comp <- lapply(1:ncluster, function(i) theta[[i]]$pi_k * dmvnorm(Y, 
+                  theta[[i]]$means, theta[[i]]$cov))
+       comp <- sapply(comp, cbind)
+       compsum <- apply(comp, 1, sum)
+      loglik <- sum(log(compsum))
+      ########################################################
+      QQ[l+1] =loglik          
+
+      print(abs((QQ[l+1]-QQ[l])/QQ[l]))
+      c = c+1
+      if (abs((QQ[l+1]-QQ[l])/QQ[l]) < eps || !is.finite(QQ[l+1])) { ## check the convergence or if we reach an infinite value
+        break
+      }
+    }
+    return(list(theta = theta,Qth = QQ, Tik = Tik))
+}
+```
+
+Application et Comparaison sur notre modèle gaussien de base 
+
+```{r}
+A = EM_algo(Y[,-ncol(Y)],ncluster = 2)
+dim(as.matrix(A))
+plot(A$Qth[2:250])
+A$theta
+Zem = sapply(1:nrow(A$Tik),function(l){
+       which.max(A$Tik[l,])})
+A$Tik
+
+table(Zem,Y[,3])
+table(mod5$classification,Y[,3])
+
+```
+On peut voir que le loglikelihood  croit à chaque itération
+
+
+Affichage des resultats
+
+```{r}
+par(mfrow = c(1,4))
+plotkmeans(Y = Y[,1:2],Zik = res.kmeans$cluster)
+plotClasses(Y = Y[,1:2],Zik = mod5$classification,truth = "Mclust")
+invisible(lapply(1:length(unique(res.kmeans$cluster)), function(k) contourClasses(mod5$parameters$mean[,k], mod5$parameters$variance$sigma[,,k], k + 1)))
+plotClasses(Y = Y[,1:2],Zik = Zem,truth = "New implementation")
+invisible(lapply(1:length(unique(res.kmeans$cluster)), function(k) contourClasses(A$theta[[k]]$means, A$theta[[k]]$cov, k + 1)))
+plotClasses(Y = Y[,1:2],Zik = Y[,3])
+invisible(lapply(1:length(unique(res.kmeans$cluster)), function(k) contourClasses(theta0[[k]]$means, theta0[[k]]$cov, k + 1)))
+```
+## Exercice 4
+
+### Question 1
+```{r}
+data("iris")
+Y =iris
+ncluster=3
+A = EM_algo(scale(Y[,-ncol(Y)],center = T,scale = T),ncluster = 3,eps = 10^-6)
+plot(A$Qth)
+A$theta
+cluster_EM <- sapply(1:nrow(Y), function(e){which.max(A$Tik[e,])})
+EM_res = as.data.frame(cbind(Y[,-ncol(Y)],cluster = as.factor(cluster_EM)))
+res.kmeans <- kmeans(Y[,-ncol(Y)],nstart = 50,centers = 3)
+Kmeans_res =as.data.frame(cbind(Y[,-ncol(Y)],cluster = as.factor(res.kmeans$cluster)))
+```
+
+
+
+```{r}
+p1<-ggplot(iris) + 
+geom_point(aes(x = Petal.Length, y = Sepal.Length , color = Species))+
+  ggtitle("True model")
+
+p2 <- ggplot(Kmeans_res) + 
+  geom_point(aes(x = Petal.Length, y = Sepal.Length , color = cluster))+
+   ggtitle("    Kmeans ")
+
+p3<- ggplot(EM_res) + 
+  geom_point(aes(x = Petal.Length, y = Sepal.Length , color = cluster))+
+   ggtitle("     EM ")
+
+gridExtra::grid.arrange(p1,p2,p3,nrow = 1, ncol = 3)
+
+```
+
+
+```{r}
+table(Y$Species,EM_res$cluster)
+table(Y$Species,Kmeans_res$cluster)
+```
+### Question 2
+
+Sur Iris data l'algorithm EM fait une meilleur distinction entre les especes versicolor et Virginica. Lorsque les espaces sont quasi similaires, les Kmeans n'admet arrive pas à bien les différencier.
